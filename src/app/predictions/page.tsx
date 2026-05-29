@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import Papa from 'papaparse';
 import Link from 'next/link';
 import {
   Tabs, TabsList, TabsTrigger, TabsContent,
@@ -82,8 +83,145 @@ const PROP_CATEGORIES = [
 
 export default function PredictionsPage() {
   const [selectedYear, setSelectedYear] = useState<string | null>(null);
+   // NEW: CSV proposition data
+  // ------------------------------
+  const [csvData, setCsvData] = useState<any[]>([]);
 
+  // Dropdown selection
+  const [selectedMainCategory, setSelectedMainCategory] =
+    useState("Bond");
+
+  // Load CSV once when page loads
+  useEffect(() => {
+    fetch("/data/propositions_by_category.csv")
+      .then(res => res.text())
+      .then(csv => {
+        const parsed = Papa.parse(csv, {
+          header: true,
+          dynamicTyping: true,
+          skipEmptyLines: true,
+        });
+
+        setCsvData(parsed.data as any[]);
+      });
+  }, []);
   const highlightedYear = YEAR_DATA.find(d => d.year === selectedYear);
+  // ------------------------------
+// NEW: Proposition category data
+// ------------------------------
+
+// Main categories available in CSV
+const mainCategories = Array.from(
+  new Set(
+    csvData
+      .map(d => d.main_category)
+      .filter(Boolean)
+  )
+).sort();
+
+// Filter rows for selected category
+const filteredCategoryData = csvData.filter(
+  d => d.main_category === selectedMainCategory
+);
+
+// Pass/fail counts by subcategory
+const subcategoryPassFail = Object.values(
+  filteredCategoryData.reduce((acc, row) => {
+
+    const type = row.topic_type || "Other";
+
+    if (!acc[type]) {
+      acc[type] = {
+        topic_type: type,
+        Pass: 0,
+        Fail: 0,
+      };
+    }
+
+    if (Number(row.passed) === 1) {
+      acc[type].Pass += 1;
+    } else {
+      acc[type].Fail += 1;
+    }
+
+    return acc;
+
+  }, {} as Record<string, any>)
+);
+
+// -------------------------------------
+// Subcategory Types Over Time
+// -------------------------------------
+
+const subcategoryOverTime = Object.values(
+  filteredCategoryData.reduce((acc, row) => {
+    const year = String(row.Year);
+    const type = row.topic_type || "Other";
+
+    if (!acc[year]) acc[year] = { year };
+
+    acc[year][type] = (acc[year][type] || 0) + 1;
+
+    return acc;
+  }, {} as Record<string, any>)
+);
+
+const topicTypes = Array.from(
+  new Set(
+    filteredCategoryData.map(
+      row => row.topic_type || "Other"
+    )
+  )
+);
+
+// -------------------------------------
+// Spending by Subcategory
+// -------------------------------------
+
+const spendingBySubtype = Object.values(
+  filteredCategoryData.reduce((acc, row) => {
+
+    const type = row.topic_type || "Other";
+
+    if (!acc[type]) {
+      acc[type] = {
+        topic_type: type,
+        supporting: 0,
+        opposing: 0,
+        count: 0
+      };
+    }
+
+    acc[type].supporting += Number(row.supporting_usd || 0);
+    acc[type].opposing += Number(row.opposing_usd || 0);
+    acc[type].count += 1;
+
+    return acc;
+
+  }, {} as Record<string, any>)
+).map((d: any) => ({
+  topic_type: d.topic_type,
+  supporting: d.supporting / d.count / 1_000_000,
+  opposing: d.opposing / d.count / 1_000_000
+}));
+
+// -------------------------------------
+// Top Spending Propositions
+// -------------------------------------
+
+const topSpendingProps = [...filteredCategoryData]
+  .filter(row => row.total_usd)
+  .sort((a, b) =>
+    Number(b.total_usd) - Number(a.total_usd)
+  )
+  .slice(0, 10)
+  .map(row => ({
+    label: `${row.Year} Prop ${row["Prop Number"]}`,
+    supporting:
+      Number(row.supporting_usd || 0) / 1_000_000,
+    opposing:
+      Number(row.opposing_usd || 0) / 1_000_000,
+  }));
 
   return (
     <div className="animate-fade-in" style={{ background: 'rgb(250 250 248)' }}>
@@ -111,6 +249,7 @@ export default function PredictionsPage() {
               {[
                 { value: 'by-year',     icon: BarChart3,  label: 'Pass/Fail by Year' },
                 { value: 'by-category', icon: BarChart3,  label: 'Pass/Fail by Category' },
+                { value: 'subcategory', icon: BarChart3, label: 'Subcategory Analysis' },
                 { value: 'finance',     icon: DollarSign, label: 'Campaign Finance' },
                 { value: 'similar',     icon: Link2,      label: 'Similar Props' },
                 { value: 'leaderboard', icon: Trophy,     label: 'Prop Stats Leaderboard' },
@@ -372,7 +511,204 @@ export default function PredictionsPage() {
                 </Card>
               </div>
             </TabsContent>
+            {/* ==SUBCATEGORY ANALYSIS== */}
+            <TabsContent value="subcategory">
+              <div className="space-y-6">
+                <div>
+                  <h2
+                  className="text-2xl font-black text-slate-900 mb-1"
+                  style={{
+                    fontFamily: "'Playfair Display', Georgia, serif"
+                  }}
+                  >
+                    Proposition Subcategory Analysis
+                  </h2>
 
+                  <p className="text-sm text-slate-500 font-serif">
+                    Explore proposition performance
+                    within each topic category.
+                  </p>
+                </div>
+
+                <Card className="border border-slate-200">
+
+                  <CardHeader className="border-b border-slate-200">
+
+                    <CardTitle
+                      className="text-lg font-bold text-slate-900"
+                      style={{
+                        fontFamily: "'Playfair Display', Georgia, serif"
+                      }}
+                    >
+                      Category Breakdown
+                    </CardTitle>
+                  </CardHeader>
+                <CardContent className="pt-6">
+                  {/* Category Dropdown */}
+                  <select
+                    value={selectedMainCategory}
+                    onChange={(e) =>
+                      setSelectedMainCategory(e.target.value)
+                    }
+                    className="
+                      border border-slate-300
+                      bg-white
+                      px-3 py-2
+                      mb-6
+                      font-serif
+                      text-sm
+                    "
+                  >
+                    {mainCategories.map(cat => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>))}
+        </select>
+
+        {/* Pass / Fail Chart */}
+
+        <ResponsiveContainer width="100%" height={350}>
+
+          <BarChart
+            data={subcategoryPassFail}
+            margin={{
+              top: 5,
+              right: 30,
+              left: 10,
+              bottom: 150
+            }}
+          >
+
+            <CartesianGrid
+              strokeDasharray="3 3"
+              stroke="#e2e8f0"
+            />
+
+            <XAxis
+              dataKey="topic_type"
+              angle={-35}
+              textAnchor="end"
+              interval={0}
+            />
+
+            <YAxis />
+
+            <Tooltip />
+
+            <Legend
+  verticalAlign="top"
+  align="right"
+/>
+
+            <Bar
+              dataKey="Fail"
+              fill={FAIL_COLOR}
+            />
+
+            <Bar
+              dataKey="Pass"
+              fill={PASS_COLOR}
+            />
+
+          </BarChart>
+
+        </ResponsiveContainer>
+
+      </CardContent>
+
+    </Card>
+<Card className="border border-slate-200">
+  <CardHeader className="border-b border-slate-200">
+    <CardTitle className="text-lg font-bold text-slate-900 font-serif">
+      Subcategory Types Over Time
+    </CardTitle>
+  </CardHeader>
+
+  <CardContent className="pt-6">
+    <ResponsiveContainer width="100%" height={400}>
+      <BarChart data={subcategoryOverTime} margin={{ top: 20, right: 30, left: 10, bottom: 80 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+        <XAxis dataKey="year" angle={-45} textAnchor="end" />
+        <YAxis />
+        <Tooltip />
+        <Legend
+  verticalAlign="bottom"
+  wrapperStyle={{
+    paddingTop: "40px"
+  }}
+/>
+
+        {topicTypes.map((type, i) => (
+          <Bar
+            key={type}
+            dataKey={type}
+            stackId="a"
+            fill={`hsl(${(i * 45) % 360}, 60%, 45%)`}
+          />
+        ))}
+      </BarChart>
+    </ResponsiveContainer>
+  </CardContent>
+</Card>
+<Card className="border border-slate-200">
+  <CardHeader className="border-b border-slate-200">
+    <CardTitle className="text-lg font-bold text-slate-900 font-serif">
+      Average Campaign Spending by Subcategory
+    </CardTitle>
+  </CardHeader>
+
+  <CardContent className="pt-6">
+    <ResponsiveContainer width="100%" height={500}>
+      <BarChart
+  layout="vertical"
+  data={spendingBySubtype}
+>
+        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+        <YAxis
+  type="category"
+  dataKey="topic_type"
+  width={220}
+/>
+<XAxis
+  type="number"
+  tickFormatter={(value) => `$${value.toFixed(0)}M`}
+/>
+        <Tooltip
+  formatter={(value: number) =>
+    `$${value.toFixed(2)}M`
+  }
+/>
+        <Legend />
+        <Bar dataKey="supporting" fill={PASS_COLOR} name="Supporting Average" />
+        <Bar dataKey="opposing" fill={FAIL_COLOR} name="Opposing Average" />
+      </BarChart>
+    </ResponsiveContainer>
+  </CardContent>
+</Card>
+<Card className="border border-slate-200">
+  <CardHeader className="border-b border-slate-200">
+    <CardTitle className="text-lg font-bold text-slate-900 font-serif">
+      Top 10 Most Expensive Propositions
+    </CardTitle>
+  </CardHeader>
+
+  <CardContent className="pt-6">
+    <ResponsiveContainer width="100%" height={400}>
+      <BarChart data={topSpendingProps} margin={{ top: 20, right: 30, left: 10, bottom: 100 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+        <XAxis dataKey="label" angle={-45} textAnchor="end" height={140} />
+        <YAxis tickFormatter={(v) => `$${v}M`} />
+        <Tooltip formatter={(v) => `$${Number(v).toFixed(2)}M`} />
+        <Legend />
+        <Bar dataKey="supporting" stackId="a" fill={PASS_COLOR} name="Supporting" />
+        <Bar dataKey="opposing" stackId="a" fill={FAIL_COLOR} name="Opposing" />
+      </BarChart>
+    </ResponsiveContainer>
+  </CardContent>
+</Card>
+  </div>
+
+</TabsContent>
             {/* ── SIMILAR PROPS ── */}
             <TabsContent value="similar">
               <div className="space-y-5">
